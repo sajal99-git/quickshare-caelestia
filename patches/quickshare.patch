@@ -1,0 +1,375 @@
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/modules/notifications/Notification.qml caelestia/modules/notifications/Notification.qml
+--- caelestia.backup-pre-quickshare/modules/notifications/Notification.qml	2026-11-02 23:57:19.030106105 +0530
++++ caelestia/modules/notifications/Notification.qml	2026-11-02 23:51:08.978372501 +0530
+@@ -20,7 +20,7 @@
+     readonly property bool hasAppIcon: modelData.appIcon.length > 0
+     readonly property int bodyTextFormat: /[<*_`#\[\]]/.test(modelData.body) ? Text.MarkdownText : Text.PlainText
+     readonly property int nonAnimHeight: summary.implicitHeight + (root.expanded ? Tokens.spacing.extraSmall * 2 + appName.height + body.height + actions.height + actions.anchors.topMargin : bodyPreview.height) + inner.anchors.margins * 2
+-    property bool expanded: Config.notifs.openExpanded
++    property bool expanded: Config.notifs.openExpanded || modelData.forceExpand
+ 
+     color: root.modelData.urgency === NotificationUrgency.Critical ? Colours.palette.m3secondaryContainer : Colours.tPalette.m3surfaceContainer
+     radius: Tokens.rounding.large
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/modules/utilities/cards/Toggles.qml caelestia/modules/utilities/cards/Toggles.qml
+--- caelestia.backup-pre-quickshare/modules/utilities/cards/Toggles.qml	2026-11-02 23:57:19.031835164 +0530
++++ caelestia/modules/utilities/cards/Toggles.qml	2026-11-02 23:41:38.587526364 +0530
+@@ -21,7 +21,7 @@
+     readonly property var quickToggles: {
+         const seenIds = new Set();
+ 
+-        return Config.utilities.quickToggles.values.filter(item => {
++        const base = Config.utilities.quickToggles.values.filter(item => {
+             if (!item.enabled)
+                 return false;
+ 
+@@ -36,6 +36,10 @@
+             seenIds.add(item.id);
+             return true;
+         });
++
++        if (!seenIds.has("quickshare"))
++            base.push({ id: "quickshare", enabled: true });
++        return base;
+     }
+     readonly property int splitIndex: Math.ceil(quickToggles.length / 2)
+     readonly property bool needExtraRow: quickToggles.length > 6
+@@ -47,7 +51,6 @@
+ 
+     ColumnLayout {
+         id: layout
+-
+         anchors.fill: parent
+         anchors.margins: Tokens.padding.large
+         spacing: Tokens.spacing.medium
+@@ -150,6 +153,18 @@
+                         onClicked: VPN.toggle()
+                     }
+                 }
++                DelegateChoice {
++                    roleValue: "quickshare"
++                    delegate: Toggle {
++                        icon: "near_me"
++                        checked: QuickShare.isEnabled
++                        onClicked: {
++                            const newState = !QuickShare.isEnabled;
++                            QuickShare.setEnabled(newState);
++                            QuickShare.setVisible(newState);
++                        }    
++                    }
++                }
+             }
+         }
+     }
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/modules/utilities/Content.qml caelestia/modules/utilities/Content.qml
+--- caelestia.backup-pre-quickshare/modules/utilities/Content.qml	2026-11-02 23:57:19.032631817 +0530
++++ caelestia/modules/utilities/Content.qml	2026-11-02 23:31:04.454860794 +0530
+@@ -5,6 +5,7 @@
+ import QtQuick.Layouts
+ import Caelestia.Config
+ import qs.components
++import qs.services
+ import qs.modules.bar.popouts as BarPopouts
+ 
+ Item {
+@@ -15,16 +16,29 @@
+     required property BarPopouts.Wrapper popouts
+     required property matrix4x4 deformMatrix
+ 
+-    readonly property int enabledCards: (idleInhibit.active ? 1 : 0) + (record.active ? 1 : 0) + (toggles.active ? 1 : 0)
+-    readonly property real nonAnimHeight: ((idleInhibit.item as IdleInhibit)?.nonAnimHeight ?? 0) + ((record.item as Record)?.nonAnimHeight ?? 0) + ((toggles.item as Toggles)?.implicitHeight ?? 0) + layout.spacing * Math.max(0, enabledCards - 1)
++    readonly property bool mediaActive: true
++    readonly property int enabledCards: (idleInhibit.active ? 1 : 0) + (mediaActive ? 1 : 0) + (toggles.active ? 1 : 0)
++
++    readonly property real nonAnimHeight: {
++        let h = 0;
++        if (idleInhibit.active)
++            h += (idleInhibit.item as IdleInhibit)?.nonAnimHeight ?? 0;
++        if (toggles.active)
++            h += (toggles.item as Toggles)?.implicitHeight ?? 0;
++        if (mediaActive && mediaLoader.item)
++            h += mediaLoader.item.nonAnimHeight;
++        h += layout.spacing * Math.max(0, enabledCards - 1);
++        return h;
++    }
+ 
+-    implicitWidth: layout.implicitWidth
+     implicitHeight: layout.implicitHeight
+ 
+     ColumnLayout {
+         id: layout
+ 
+-        anchors.fill: parent
++        anchors.top: parent.top
++        anchors.left: parent.left
++        anchors.right: parent.right
+         spacing: Tokens.spacing.medium
+ 
+         Loader {
+@@ -40,18 +54,158 @@
+         }
+ 
+         Loader {
+-            id: record
++            id: mediaLoader
+ 
+             Layout.fillWidth: true
+-            active: Config.utilities.cards.recorder
++            active: root.mediaActive
+             visible: active
+             z: 1
+ 
+-            sourceComponent: Record {
+-                objectName: "utilitiesScreenRecorder"
+-
+-                props: root.props
+-                screenState: root.screenState
++            sourceComponent: ColumnLayout {
++                id: mediaLayout
++                spacing: Tokens.spacing.small
++
++                property int currentIndex: 0
++                property bool animEnabled: false
++
++                onCurrentIndexChanged: {
++                    animEnabled = true;
++                    animDisableTimer.restart();
++                }
++
++                Timer {
++                    id: animDisableTimer
++                    interval: 400
++                    onTriggered: mediaLayout.animEnabled = false
++                }
++
++                property real nonAnimHeight: {
++                    const swipeItem = mediaFlickable.currentItem ? mediaFlickable.currentItem.item : null;
++                    const itemHeight = swipeItem ? (swipeItem.nonAnimHeight ?? swipeItem.implicitHeight) : 0;
++                    return itemHeight + (indicatorRow.visible ? indicatorRow.implicitHeight + spacing : 0);
++                }
++
++                Behavior on nonAnimHeight {
++                    enabled: mediaLayout.animEnabled
++                    Anim {}
++                }
++
++                Flickable {
++                    id: mediaFlickable
++                    Layout.fillWidth: true
++                    clip: true
++                    interactive: mediaRepeater.count > 1
++
++                    readonly property Item currentItem: {
++                        mediaRepeater.count;
++                        mediaRepeater.dummy;
++                        return mediaRepeater.itemAt(mediaLayout.currentIndex);
++                    }
++
++                    flickableDirection: Flickable.HorizontalFlick
++
++                    implicitHeight: currentItem ? currentItem.implicitHeight : 0
++
++                    contentX: currentItem ? currentItem.x : 0
++                    contentWidth: mediaRow.implicitWidth
++                    contentHeight: mediaRow.implicitHeight
++
++                    onContentXChanged: {
++                        if (!moving || !currentItem)
++                            return;
++
++                        const x = contentX - currentItem.x;
++                        if (x > currentItem.width / 2)
++                            mediaLayout.currentIndex = Math.min(mediaLayout.currentIndex + 1, mediaRepeater.count - 1);
++                        else if (x < -currentItem.width / 2)
++                            mediaLayout.currentIndex = Math.max(mediaLayout.currentIndex - 1, 0);
++                    }
++
++                    onDragEnded: {
++                        if (!currentItem)
++                            return;
++
++                        const x = contentX - currentItem.x;
++                        if (x > currentItem.width / 10)
++                            mediaLayout.currentIndex = Math.min(mediaLayout.currentIndex + 1, mediaRepeater.count - 1);
++                        else if (x < -currentItem.width / 10)
++                            mediaLayout.currentIndex = Math.max(mediaLayout.currentIndex - 1, 0);
++                        else
++                            contentX = Qt.binding(() => currentItem ? currentItem.x : 0);
++                    }
++
++                    Row {
++                        id: mediaRow
++                        spacing: Tokens.spacing.medium
++
++                        Repeater {
++                            id: mediaRepeater
++
++                            property int dummy: 0
++                            onItemAdded: dummy++
++                            model: {
++                                const pages = [];
++                                if (Config.utilities.cards.recorder)
++                                    pages.push("record");
++                                pages.push("quickShare");
++                                return pages;
++                            }
++
++                            Loader {
++                                required property int index
++                                required property string modelData
++                                active: true
++                                sourceComponent: modelData === "record" ? recordComp : quickShareComp
++
++                                width: mediaFlickable.width
++                            }
++                        }
++                    }
++
++                    Behavior on contentX {
++                        Anim {}
++                    }
++
++                    Behavior on implicitHeight {
++                        enabled: mediaLayout.animEnabled
++                        Anim {}
++                    }
++                }
++
++                Item {
++                    id: indicatorRow
++                    Layout.alignment: Qt.AlignHCenter
++                    implicitWidth: bgRow.implicitWidth
++                    implicitHeight: bgRow.implicitHeight
++                    visible: mediaRepeater.count > 1
++
++                    Row {
++                        id: bgRow
++                        spacing: Tokens.spacing.small
++
++                        Repeater {
++                            model: mediaRepeater.count
++
++                            StyledRect {
++                                required property int index
++                                width: Tokens.spacing.medium
++                                height: Tokens.spacing.small
++                                radius: Tokens.rounding.full
++                                color: Colours.palette.m3surfaceVariant
++                            }
++                        }
++                    }
++
++                    StyledRect {
++                        width: Tokens.spacing.medium
++                        height: Tokens.spacing.small
++                        radius: Tokens.rounding.full
++                        color: Colours.palette.m3primary
++                        x: mediaLayout.currentIndex * (Tokens.spacing.medium + Tokens.spacing.small)
++
++                        Behavior on x { Anim { type: Anim.DefaultEffects } }
++                    }
++                }
+             }
+         }
+ 
+@@ -71,8 +225,36 @@
+         }
+     }
+ 
++    Component {
++        id: recordComp
++        Record {
++            objectName: "utilitiesScreenRecorder"
++            props: root.props
++            screenState: root.screenState
++        }
++    }
++
++    Component {
++        id: quickShareComp
++        QuickShareList {
++            objectName: "utilitiesQuickShare"
++            props: root.props
++            screenState: root.screenState
++        }
++    }
++
+     RecordingDeleteModal {
+         props: root.props
+         deformMatrix: root.deformMatrix
+     }
++
++    QuickShareDeleteModal {
++        props: root.props
++        deformMatrix: root.deformMatrix
++    }
++
++    QuickShareDeviceSelector {
++        props: root.props
++        deformMatrix: root.deformMatrix
++    }
+ }
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/modules/utilities/Wrapper.qml caelestia/modules/utilities/Wrapper.qml
+--- caelestia.backup-pre-quickshare/modules/utilities/Wrapper.qml	2026-11-02 23:57:19.032631817 +0530
++++ caelestia/modules/utilities/Wrapper.qml	2026-11-03 00:14:09.189760504 +0530
+@@ -21,10 +21,15 @@
+         property bool recordingListExpanded: false
+         property string recordingConfirmDelete
+         property string recordingMode
++        property bool quickShareListExpanded: false
++        property string quickShareConfirmDeletePath
++        property int quickShareConfirmDeleteIndex: -1
++        property bool quickShareDeviceSelectorOpen: false
++        property bool quickShareFileDialogOpen: false
+ 
+         reloadableId: "utilities"
+     }
+-    readonly property bool shouldBeActive: screenState.sidebar || (screenState.utilities && Config.utilities.enabled && !(screenState.session && Config.session.enabled))
++    readonly property bool shouldBeActive: props.quickShareFileDialogOpen || screenState.sidebar || (screenState.utilities && Config.utilities.enabled && !(screenState.session && Config.session.enabled))
+     readonly property real totalPadding: content.anchors.margins + CUtils.clamp(content.anchors.margins - Config.border.thickness, 0, content.anchors.margins)
+     readonly property real nonAnimHeight: ((content.item as Content)?.nonAnimHeight ?? 0) + totalPadding
+     property real offsetScale: shouldBeActive ? 0 : 1
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/services/NotifData.qml caelestia/services/NotifData.qml
+--- caelestia.backup-pre-quickshare/services/NotifData.qml	2026-11-02 23:57:19.033146759 +0530
++++ caelestia/services/NotifData.qml	2026-11-02 23:46:25.577446843 +0530
+@@ -14,6 +14,7 @@
+ 
+     property bool popup
+     property bool closed
++    property bool forceExpand
+     property var locks: new Set()
+ 
+     property date time: new Date()
+diff '--color=auto' -ruN -x '*.bak*' -x 'QuickShare*.qml' caelestia.backup-pre-quickshare/services/Notifs.qml caelestia/services/Notifs.qml
+--- caelestia.backup-pre-quickshare/services/Notifs.qml	2026-11-02 23:57:19.033146759 +0530
++++ caelestia/services/Notifs.qml	2026-11-02 23:52:24.974398454 +0530
+@@ -57,7 +57,7 @@
+         id: saveTimer
+ 
+         interval: 1000
+-        onTriggered: storage.setText(JSON.stringify(root.notClosed.map(n => ({
++        onTriggered: storage.setText(JSON.stringify(root.notClosed.filter(n => !n.forceExpand).map(n => ({
+                     time: n.time,
+                     id: n.id,
+                     summary: n.summary,
+@@ -167,6 +167,21 @@
+         target: "notifs"
+     }
+ 
++    function addCustomNotification(summary: string, body: string, appIcon: string, actions: var, forceExpand: bool): var {
++        const comp = notifComp.createObject(root, {
++            popup: root.shouldShowPopup(),
++            summary: summary,
++            body: body,
++            appIcon: appIcon,
++            appName: "Quick Share",
++            actions: actions,
++            hints: {},
++            forceExpand: forceExpand
++        });
++        root.list = [comp, ...root.list];
++        return comp;
++    }
++
+     Component {
+         id: notifComp
+ 
