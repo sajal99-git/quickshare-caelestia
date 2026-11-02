@@ -24,8 +24,8 @@ Tested on CachyOS (Arch), Hyprland, Qt 6.12. Sending and receiving both work.
 
 ## Install
 
-    git clone <this repo>
-    cd <this repo>
+    git clone https://github.com/sajal99-git/quickshare-caelestia.git
+    cd quickshare-caelestia
     ./install.sh                      # default: ~/.config/quickshell/caelestia
     ./install.sh /path/to/shell/dir   # custom shell dir
 
@@ -53,3 +53,7 @@ Restore the `*.pre-quickshare.*` backup the installer created, and remove `/usr/
 ## Credits and license
 
 The Quick Share QML files and shell integration come from MiDnight Shell (https://github.com/dim-ghub/midnight-shell), a fork of Caelestia (https://github.com/caelestia-dots/shell), both under GPL-3.0. This repository is also released under GPL-3.0.
+
+## Troubleshooting
+
+If the phone cannot find or send to the PC: check that the phone Quick Share visibility is Everyone, that near_me is on after a shell restart, and that the firewall allows TCP 47802 from your LAN. To test, briefly run `sudo ufw disable`, retry, then `sudo ufw enable`.
